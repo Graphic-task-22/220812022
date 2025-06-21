@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>地铁跑酷</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #87ceeb, #98fb98);
+            font-family: "Comic Sans MS", cursive, sans-serif;
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #ffd700;
+            font-size: 28px;
+            font-weight: bold;
+            z-index: 100;
+            text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 15px;
+            border: 3px solid #ffd700;
+        }
+
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            z-index: 100;
+            background: linear-gradient(135deg, #ff6b6b, #4ecdc4);
+            padding: 30px;
+            border-radius: 20px;
+            border: 5px solid #ffd700;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            z-index: 100;
+            background: linear-gradient(135deg, #ff4757, #ff6b6b);
+            padding: 40px;
+            border-radius: 20px;
+            border: 5px solid #ffd700;
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6);
+            display: none;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 20px;
+            font-weight: bold;
+            background: linear-gradient(135deg, #4ecdc4, #44a08d);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 15px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 7px 20px rgba(0, 0, 0, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="ui">
+            <div>💰 金币: <span id="score">0</span></div>
+            <div>🚄 速度: <span id="speed">1</span></div>
+        </div>
+
+        <div id="instructions">
+            <h2>🚇 地铁跑酷 🏃‍♂️</h2>
+            <p>🎮 A/D 或 ←/→ : 左右移动</p>
+            <p>🦘 W 或 ↑ : 跳跃</p>
+            <button onclick="startGame()">🚀 开始冒险</button>
+        </div>
+
+        <div id="gameOver">
+            <h2>💥 游戏结束 💥</h2>
+            <p>🏆 最终分数: <span id="finalScore">0</span></p>
+            <button onclick="restartGame()">🔄 重新开始</button>
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from "three";
+        import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+        
+        class SubwaySurfersGame {
+            constructor() {
+                //  游戏常量配置
+                // 轨道宽度 - 控制玩家左右移动的间隔
+                this.LANE_WIDTH = 5.5;
+                // 地面长度 - 控制场景的纵向延伸距离
+                this.GROUND_LENGTH = 200;
+                // 基础玩家移动速度 - 控制游戏整体节奏
+                this.PLAYER_SPEED = 0.3;
+                // 跳跃力度 - 控制玩家跳跃高度
+                this.JUMP_FORCE = 0.6;
+                // 重力加速度 - 控制玩家下落速度
+                this.GRAVITY = 0.025;
+                // 目标玩家高度 - 用于模型缩放
+                this.TARGET_PLAYER_HEIGHT = 1.2;
+                
+                // 游戏状态变量 
+                this.gameStarted = false;   // 游戏是否已开始
+                this.gameRunning = false;   // 游戏是否正在运行
+                this.score = 0;             // 当前得分
+                this.speed = 1;             // 当前游戏速度倍数
+                this.playerLane = 0;        // 玩家当前所在轨道(-1左,0中,1右)
+                this.isJumping = false;     // 玩家是否处于跳跃状态
+                this.isSliding = false;    // 玩家是否处于滑行状态(未实现)
+                this.jumpVelocity = 0;      // 当前跳跃速度
+                
+                // Three.js相关变量 
+                this.clock = new THREE.Clock(); // Three.js时钟，用于精确计时
+                this.mixer = null;         // 动画混合器，用于处理角色动画
+                this.playerActions = {};    // 存储不同动画动作(如跑、跳等)
+                
+                // 游戏对象 
+                this.scene = null;          // Three.js场景
+                this.camera = null;         // 相机
+                this.renderer = null;       // 渲染器
+                this.player = null;         // 玩家角色模型(从GLTF加载)
+                this.playerModelRoot = null;// 玩家模型的根对象(用于位置调整)
+                this.ground = null;        // 地面对象
+                this.coins = [];           // 金币数组
+                this.buildings = [];       // 建筑物数组
+                this.trains = [];          // 火车数组
+                
+                // 资源加载器 ===============
+                this.loader = new GLTFLoader();     // GLTF模型加载器
+                this.textureLoader = new THREE.TextureLoader(); // 纹理加载器
+                
+                // =============== 颜色配置 ===============
+                this.COLORS = {
+                    player: 0xff6b6b,       // 玩家颜色
+                    ground: 0x8b4513,      // 地面颜色
+                    tracks: 0x333333,      // 轨道颜色
+                    train: 0x2ecc71,       // 火车颜色
+                    buildings: [0xff9ff3, 0x54a0ff, 0x5f27cd, 0x00d2d3, 0xff9f43], // 建筑物颜色数组
+                    coins: 0xffd700,       // 金币颜色
+                };
+                
+                // =============== 资源预加载 ===============
+                this.resources = {
+                    playerModel: null,      // 玩家模型
+                    buildingModels: [],     // 建筑物模型数组
+                    trainModel: null,       // 火车模型
+                    groundTexture: null     // 地面纹理
+                };
+                
+                // 初始化游戏
+                this.initGame();
+            }
+            
+            /**
+             * 初始化游戏 - 加载资源并设置游戏
+             * 使用异步加载确保所有资源加载完成后再初始化场景
+             */
+            async initGame() {
+                try {
+                    // 使用Promise.all并行加载所有资源
+                    await Promise.all([
+                        this.loadPlayerModel(),     // 加载玩家模型
+                        this.loadBuildingModels(), // 加载建筑物模型
+                        this.loadTrainModel(),     // 加载火车模型
+                        this.loadGroundTexture()  // 加载地面纹理
+                    ]);
+                    
+                    // 资源加载完成后初始化场景
+                    this.initScene();
+                    
+                    // 显示开始界面
+                    document.getElementById("instructions").style.display = "block";
+                    document.getElementById("gameOver").style.display = "none";
+                } catch (error) {
+                    console.error("游戏初始化失败:", error);
+                }
+            }
+            
+            /**
+             * 加载玩家模型
+             * 使用GLTFLoader加载GLB格式的3D模型
+             * @return {Promise} 加载完成的Promise
+             */
+            loadPlayerModel() {
+                return new Promise((resolve, reject) => {
+                    // 使用GLTFLoader加载模型
+                    this.loader.load(
+                        "./assets/models/player1.glb", // 模型路径
+                        (gltf) => {
+                            // 计算模型包围盒以确定原始尺寸
+                            const bbox = new THREE.Box3().setFromObject(gltf.scene);
+                            const originalHeight = bbox.max.y - bbox.min.y;
+                            
+                            // 计算缩放因子使模型高度标准化
+                            gltf.scene.userData.scaleFactor = this.TARGET_PLAYER_HEIGHT / originalHeight;
+                            
+                            // 存储加载的模型
+                            this.resources.playerModel = gltf.scene;
+
+                            // 初始化动画混合器
+                            this.mixer = new THREE.AnimationMixer(gltf.scene);
+                            
+                            // 处理模型中的动画片段
+                            gltf.animations.forEach((clip) => {
+                                // 假设第一个动画是跑步动画
+                                if (this.playerActions.run === undefined) {
+                                     this.playerActions.run = this.mixer.clipAction(clip);
+                                }
+                            });
+
+                            resolve(); // 加载完成
+                        },
+                        undefined, // 进度回调(未使用)
+                        (error) => {
+                            console.error("加载玩家模型失败:", error);
+                            reject(error); // 加载失败
+                        }
+                    );
+                });
+            }
+            
+            /**
+             * 加载建筑物模型
+             * 加载多个建筑物模型用于场景装饰
+             * @return {Promise} 所有建筑物加载完成的Promise
+             */
+            loadBuildingModels() {
+                // 建筑物模型路径数组
+                const paths = [
+                    "./assets/models/house1.glb",
+                    "./assets/models/house3.glb",
+                ];
+                
+                // 使用Promise.all并行加载所有建筑物模型
+                return Promise.all(paths.map((path, index) => {
+                    return new Promise((resolve, reject) => {
+                        this.loader.load(
+                            path,
+                            (gltf) => {
+                                // 存储加载的建筑物模型
+                                this.resources.buildingModels[index] = gltf.scene;
+                                resolve();
+                            },
+                            undefined,
+                            (error) => {
+                                console.error(`加载建筑模型 ${path} 失败:`, error);
+                                reject(error);
+                            }
+                        );
+                    });
+                }));
+            }
+            
+            /**
+             * 加载火车模型
+             * @return {Promise} 火车模型加载完成的Promise
+             */
+            loadTrainModel() {
+                return new Promise((resolve, reject) => {
+                    this.loader.load(
+                        "./assets/models/train.glb",
+                        (gltf) => {
+                            // 存储加载的火车模型
+                            this.resources.trainModel = gltf.scene;
+                            resolve();
+                        },
+                        undefined,
+                        (error) => {
+                            console.error("加载火车模型失败:", error);
+                            reject(error);
+                        }
+                    );
+                });
+            }
+            
+            /**
+             * 加载地面纹理
+             * 加载并配置地面重复纹理
+             * @return {Promise} 纹理加载完成的Promise
+             */
+            loadGroundTexture() {
+                return new Promise((resolve, reject) => {
+                    this.textureLoader.load(
+                        "./assets/textures/track1.png",
+                        (texture) => {
+                            // 配置纹理重复模式
+                            this.resources.groundTexture = texture;
+                            texture.wrapS = THREE.RepeatWrapping; // 水平重复
+                            texture.wrapT = THREE.RepeatWrapping; // 垂直重复
+                            texture.repeat.set(1, 10); // 设置重复次数(沿Z轴重复10次)
+                            resolve();
+                        },
+                        undefined,
+                        (error) => {
+                            console.error("加载地面纹理失败:", error);
+                            reject(error);
+                        }
+                    );
+                });
+            }
+            
+            /**
+             * 初始化游戏场景
+             * 创建Three.js场景、相机、渲染器及所有游戏对象
+             */
+            initScene() {
+                // =============== 创建Three.js场景 ===============
+                this.scene = new THREE.Scene();
+                // 添加雾效增强深度感
+                this.scene.fog = new THREE.Fog(0x87ceeb, 30, 150);
+                
+                // =============== 创建相机 ===============
+                this.camera = new THREE.PerspectiveCamera(
+                    75, // 视野角度
+                    window.innerWidth / window.innerHeight, // 宽高比
+                    0.1, // 近裁剪面
+                    1000 // 远裁剪面
+                );
+                // 设置相机初始位置和朝向
+                this.camera.position.set(0, 5, 15);
+                this.camera.lookAt(0, 1, -10);
+                
+                // =============== 创建渲染器 ===============
+                this.renderer = new THREE.WebGLRenderer({ 
+                    antialias: true // 开启抗锯齿
+                });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setClearColor(0x87ceeb); // 设置背景色
+                this.renderer.shadowMap.enabled = true; // 启用阴影
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 使用软阴影
+                // 将渲染器的DOM元素添加到页面
+                document.getElementById("gameContainer").appendChild(this.renderer.domElement);
+                
+                // =============== 创建光源 ===============
+                // 平行光(主光源)
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 2.2);
+                directionalLight.position.set(15, 25, 10);
+                directionalLight.castShadow = true; // 投射阴影
+                // 设置阴影贴图分辨率
+                directionalLight.shadow.mapSize.width = 2048;
+                directionalLight.shadow.mapSize.height = 2048;
+                this.scene.add(directionalLight);
+                
+                // 环境光(补充光源)
+                const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+                this.scene.add(ambientLight);
+
+                // =============== 创建游戏元素 ===============
+                this.createGround();    // 创建地面
+                this.createTrains();    // 创建火车
+                this.createBuildings(); // 创建建筑物
+                this.createPlayer();    // 创建玩家角色
+                this.generateCoins();   // 生成金币
+                
+                // 设置游戏控制
+                this.setupControls();
+                
+                // 开始动画循环
+                this.animate();
+                
+                // 监听窗口大小变化事件
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+            
+            /**
+             * 窗口大小调整处理
+             * 响应式调整相机和渲染器
+             */
+            onWindowResize() {
+                // 更新相机宽高比
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix(); // 必须调用此方法使更改生效
+                // 更新渲染器尺寸
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            
+            /**
+             * 创建地面
+             * 使用平面几何体创建带有纹理的地面
+             */
+            createGround() {
+                // 创建地面几何体(宽度20，长度GROUND_LENGTH)
+                const groundGeometry = new THREE.PlaneGeometry(20, this.GROUND_LENGTH);
+                // 创建地面材质(使用加载的纹理)
+                const groundMaterial = new THREE.MeshLambertMaterial({
+                    map: this.resources.groundTexture, // 设置纹理
+                    transparent: true,    // 启用透明度
+                    opacity: 0.95,       // 设置不透明度
+                });
+                
+                // 创建地面网格对象
+                this.ground = new THREE.Mesh(groundGeometry, groundMaterial);
+                // 旋转地面使其水平
+                this.ground.rotation.x = -Math.PI / 2;
+                // 设置地面位置(稍微低于玩家)
+                this.ground.position.y = -1;
+                // 允许地面接收阴影
+                this.ground.receiveShadow = true;
+                // 将地面添加到场景
+                this.scene.add(this.ground);
+            }
+            
+            /**
+             * 创建火车
+             * 在轨道上生成多列火车
+             */
+            createTrains() {
+                const trainCount = 6;       // 火车数量
+                const minSpacing = 55;      // 火车间最小间距
+                const maxSpacing = 80;       // 火车间最大间距
+                // 火车轨道分布模式(防止所有火车在同一轨道)
+                const lanePatterns = [
+                    [-1, 0, 1, -1, 0, 1],  // 模式1: 左中右左中右
+                    [0, 1, -1, 0, 1, -1],   // 模式2: 中右左中右左
+                    [0, 0, 1, -1, 0, 1]     // 模式3: 中中右左中右
+                ];
+                // 随机选择一个分布模式
+                const pattern = lanePatterns[Math.floor(Math.random() * lanePatterns.length)];
+                
+                let currentZ = 10; // 初始Z位置
+                
+                // 创建所有火车
+                for (let i = 0; i < trainCount; i++) {
+                    const lane = pattern[i % pattern.length]; // 根据模式选择轨道
+                    // 随机间距(增加变化性)
+                    const spacing = minSpacing + Math.random() * (maxSpacing - minSpacing);
+                    
+                    // 克隆火车模型(避免重复加载)
+                    const train = this.resources.trainModel.clone();
+                    // 设置火车位置(根据轨道和间距)
+                    train.position.set(lane * this.LANE_WIDTH, 0, currentZ);
+                    // 缩放火车模型
+                    train.scale.set(0.15, 0.15, 0.15);
+                    // 旋转火车使其朝向正确方向
+                    train.rotation.y = Math.PI;
+                    
+                    // 遍历火车所有子对象设置阴影
+                    train.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;    // 投射阴影
+                            child.receiveShadow = true; // 接收阴影
+                        }
+                    });
+                    
+                    // 存储火车自定义数据
+                    train.userData = {
+                        lane: lane, // 所在轨道
+                        speed: 0.8 + Math.random() * 0.4 // 随机速度
+                    };
+                    
+                    // 添加到火车数组和场景
+                    this.trains.push(train);
+                    this.scene.add(train);
+                    
+                    // 更新下一个火车的位置
+                    currentZ -= spacing;
+                }
+            }
+            
+            /**
+             * 创建建筑物
+             * 在轨道两侧生成建筑物作为场景装饰
+             */
+            createBuildings() {
+                const spacing = 10; // 建筑物间距
+                // 每侧建筑物数量(根据地面长度计算)
+                const countPerSide = Math.floor(this.GROUND_LENGTH / spacing);
+                const leftX = -12;  // 左侧建筑物X坐标
+                const rightX = 22;  // 右侧建筑物X坐标
+                
+                // 建筑物配置(缩放和旋转)
+                const buildingConfigs = [
+                    { scale: [2.2, 2.2, 2.2], rotationY: Math.PI / 2 }, // 左侧建筑物配置
+                    { scale: [1.2, 1.2, 1.2], rotationY: -Math.PI / 2 }, // 右侧建筑物配置
+                ];
+                
+                // 创建建筑物
+                for (let i = 0; i < countPerSide; i++) {
+                    // 计算建筑物Z位置(从场景后端开始)
+                    const zPos = -this.GROUND_LENGTH / 2 + i * spacing;
+                    
+                    // =============== 创建左侧建筑物 ===============
+                    const leftModel = this.resources.buildingModels[0].clone();
+                    const leftConfig = buildingConfigs[0];
+                    leftModel.position.set(leftX, -1, zPos);
+                    leftModel.scale.set(...leftConfig.scale);
+                    leftModel.rotation.y = leftConfig.rotationY;
+                    // 设置阴影
+                    leftModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    this.scene.add(leftModel);
+                    this.buildings.push(leftModel);
+                    
+                    // =============== 创建右侧建筑物 ===============
+                    const rightModel = this.resources.buildingModels[1].clone();
+                    const rightConfig = buildingConfigs[1];
+                    rightModel.position.set(rightX, -1, zPos);
+                    rightModel.scale.set(...rightConfig.scale);
+                    rightModel.rotation.y = rightConfig.rotationY;
+                    // 设置阴影
+                    rightModel.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    this.scene.add(rightModel);
+                    this.buildings.push(rightModel);
+                }
+            }
+            
+            /**
+             * 创建玩家角色
+             * 初始化玩家模型并设置动画
+             */
+            createPlayer() {
+                // 检查模型是否已加载
+                if (!this.resources.playerModel) {
+                    console.warn("玩家模型还没加载完");
+                    return;
+                }
+                
+                // 使用加载的玩家模型
+                this.player = this.resources.playerModel;
+                // 应用之前计算的缩放因子
+                const scale = this.resources.playerModel.userData.scaleFactor;
+                this.player.scale.set(scale, scale, scale);
+                // 初始位置
+                this.player.position.set(0, 0, 0);
+                // 旋转玩家使其面向正确方向
+                this.player.rotation.y = Math.PI;
+
+                // 遍历玩家模型所有子对象
+                this.player.traverse((child) => {
+                    if (child.isMesh) {
+                        // 设置阴影
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        
+                        // 调整材质属性提高可见性
+                        if (child.material) {
+                            child.material.transparent = false;
+                            child.material.opacity = 1;
+                            child.material.color.set(0xffffff); // 设置基础颜色
+                            if (child.material.emissive) {
+                                child.material.emissive.set(0x222222); // 设置自发光
+                            }
+                            child.material.needsUpdate = true; // 标记材质需要更新
+                        }
+                    }
+                });
+                
+                // 将玩家添加到场景
+                this.scene.add(this.player);
+            }
+            
+            /**
+             * 生成金币
+             * 在轨道上生成可收集的金币
+             */
+            generateCoins() {
+                const coinCount = 80; // 金币总数
+                // 金币分布模式(避免所有金币在同一轨道)
+                const coinPatterns = [
+                    [0, 1, -1, 0, 1, -1], // 模式1: 中右左中右左
+                    [-1, 0, 1, -1, 0, 1], // 模式2: 左中右左中右
+                    [0, 0, 1, -1, 0, 0]   // 模式3: 中中右左中中
+                ];
+                // 随机选择一个分布模式
+                const pattern = coinPatterns[Math.floor(Math.random() * coinPatterns.length)];
+                
+                // 创建所有金币
+                for (let i = 0; i < coinCount; i++) {
+                    // 根据模式选择轨道
+                    const lane = pattern[i % pattern.length];
+                    // 创建单个金币
+                    const coinGroup = this.createSingleCoin(lane, i);
+                    // 添加到金币数组和场景
+                    this.coins.push(coinGroup);
+                    this.scene.add(coinGroup);
+                }
+            }
+            
+            /**
+             * 创建单个金币
+             * @param {number} lane - 金币所在轨道(-1左,0中,1右)
+             * @param {number} index - 金币索引(用于Z位置计算)
+             * @return {THREE.Group} 金币组对象
+             */
+            createSingleCoin(lane, index) {
+                // 使用Group组合多个几何体构成金币
+                const coinGroup = new THREE.Group();
+                
+                // =============== 金币主体 ===============
+                // 使用圆柱体几何体
+                const coinGeometry = new THREE.CylinderGeometry(0.6, 0.6, 0.2, 24);
+                // 使用Phong材质实现金属反光效果
+                const coinMaterial = new THREE.MeshPhongMaterial({
+                    color: this.COLORS.coins, // 金币颜色
+                    shininess: 100,          // 高光强度
+                    specular: 0xffffff        // 高光颜色
+                });
+                const coin = new THREE.Mesh(coinGeometry, coinMaterial);
+                
+                // =============== 金币内环 ===============
+                // 使用圆环几何体增加细节
+                const innerRing = new THREE.Mesh(
+                    new THREE.RingGeometry(0.3, 0.5, 12),
+                    new THREE.MeshBasicMaterial({ color: 0xffffff }) // 白色内环
+                );
+                innerRing.rotation.x = Math.PI / 2; // 旋转使其水平
+                
+                // 将部件添加到金币组
+                coinGroup.add(coin);
+                coinGroup.add(innerRing);
+                // 设置金币位置(根据轨道和索引)
+                coinGroup.position.set(lane * this.LANE_WIDTH, 2, -20 - index * 5);
+                // 旋转金币使其面向相机
+                coinGroup.rotation.x = Math.PI / 2;
+                // 存储金币自定义数据
+                coinGroup.userData = { 
+                    lane: lane,   // 所在轨道
+                    active: true  // 是否可收集
+                };
+                
+                return coinGroup;
+            }
+            
+            /**
+             * 设置游戏控制
+             * 监听键盘事件控制玩家移动
+             */
+            setupControls() {
+                document.addEventListener("keydown", (event) => {
+                    // 游戏未运行时忽略输入
+                    if (!this.gameRunning) return;
+                    
+                    // 根据按键执行不同动作
+                    switch (event.code) {
+                        case "KeyA":
+                        case "ArrowLeft":
+                            this.moveLeft(); // 向左移动
+                            break;
+                        case "KeyD":
+                        case "ArrowRight":
+                            this.moveRight(); // 向右移动
+                            break;
+                        case "KeyW":
+                        case "ArrowUp":
+                            this.jump(); // 跳跃
+                            break;
+                    }
+                });
+            }
+            
+            /**
+             * 向左移动
+             * 改变玩家所在轨道(实际移动在update中平滑处理)
+             */
+            moveLeft() {
+                // 检查是否在最左侧轨道
+                if (this.playerLane > -1) {
+                    this.playerLane--; // 更新轨道索引
+                }
+            }
+            
+            /**
+             * 向右移动
+             * 改变玩家所在轨道(实际移动在update中平滑处理)
+             */
+            moveRight() {
+                // 检查是否在最右侧轨道
+                if (this.playerLane < 1) {
+                    this.playerLane++; // 更新轨道索引
+                }
+            }
+            
+            /**
+             * 跳跃
+             * 设置跳跃状态和初速度
+             */
+            jump() {
+                // 检查是否已处于跳跃状态
+                if (!this.isJumping) {
+                    this.isJumping = true; // 设置跳跃状态
+                    this.jumpVelocity = this.JUMP_FORCE; // 设置跳跃初速度
+                    // 这里可以添加跳跃动画触发
+                }
+            }
+            
+            /**
+             * 更新玩家位置
+             * 处理玩家左右移动的平滑过渡和跳跃物理
+             */
+            updatePlayerPosition() {
+                // 计算目标X位置(根据当前轨道)
+                const targetX = this.playerLane * this.LANE_WIDTH;
+                // 使用线性插值实现平滑移动
+                this.player.position.x = THREE.MathUtils.lerp(
+                    this.player.position.x, // 当前位置
+                    targetX,               // 目标位置
+                    0.15                   // 插值系数(0-1)
+                );
+            }
+            
+            /**
+             * 碰撞检测
+             * 检查玩家是否与火车相撞
+             * @return {boolean} 是否发生碰撞
+             */
+            checkPlayerCollision() {
+                // 玩家模型未加载时返回无碰撞
+                if (!this.player) return false;
+                
+                // 计算玩家包围盒
+                const playerBox = new THREE.Box3().setFromObject(this.player);
+                
+                // 检查与所有火车的碰撞
+                for (const train of this.trains) {
+                    // 跳过无效火车
+                    if (!train || !train.userData) continue;
+                    
+                    // 计算火车包围盒
+                    const trainBox = new THREE.Box3().setFromObject(train);
+                    // 检查包围盒是否相交
+                    if (playerBox.intersectsBox(trainBox)) {
+                        return true; // 发生碰撞
+                    }
+                }
+                
+                return false; // 无碰撞
+            }
+            
+            /**
+             * 更新游戏状态
+             * 每帧调用，处理游戏逻辑
+             */
+            update() {
+                // 游戏未运行或玩家未加载时跳过更新
+                if (!this.gameRunning || !this.player) return;
+                
+                // 获取帧时间差(用于平滑动画)
+                const delta = this.clock.getDelta();
+
+                // 更新动画混合器
+                if (this.mixer) {
+                    this.mixer.update(delta);
+                }
+
+                // =============== 更新分数和速度 ===============
+                // 分数随速度增加
+                this.score += Math.floor(this.speed * 0.5);
+                // 速度随时间逐渐增加
+                this.speed += 0.002 * delta * 60; // 乘以60使速度变化与帧率无关
+                // 更新UI显示
+                document.getElementById("score").textContent = Math.floor(this.score);
+                document.getElementById("speed").textContent = this.speed.toFixed(2);
+                
+                // =============== 更新玩家位置 ===============
+                this.updatePlayerPosition();
+                
+                // =============== 处理跳跃物理 ===============
+                if (this.isJumping || this.player.position.y > 0) {
+                    // 更新Y位置(速度随时间递减)
+                    this.player.position.y += this.jumpVelocity;
+                    // 应用重力
+                    this.jumpVelocity -= this.GRAVITY;
+                }
+                
+                // =============== 处理落地 ===============
+                if (this.player.position.y <= 0) {
+                    this.player.position.y = 0; // 重置高度
+                    this.isJumping = false;     // 重置跳跃状态
+                    this.jumpVelocity = 0;      // 重置速度
+                    // 这里可以重置为跑步动画
+                }
+                
+                // =============== 碰撞检测 ===============
+                if (this.checkPlayerCollision()) {
+                    this.gameOver(); // 游戏结束
+                    return;
+                }
+                
+                // =============== 更新游戏对象 ===============
+                this.updateTrains();    // 更新火车位置
+                this.updateBuildings(); // 更新建筑物位置
+                this.updateCoins();    // 更新金币状态
+                
+                // =============== 相机跟随 ===============
+                this.camera.position.z = this.player.position.z + 15;
+            }
+            
+            /**
+             * 更新火车位置
+             * 处理火车的移动和循环
+             */
+            updateTrains() {
+                for (const train of this.trains) {
+                    // 跳过无效火车
+                    if (!train || !train.userData) continue;
+                    
+                    // 根据游戏速度移动火车
+                    train.position.z += this.PLAYER_SPEED * this.speed * train.userData.speed;
+                    
+                    // 检查火车是否超出视野
+                    if (train.position.z > 80) {
+                        // 随机选择新轨道
+                        const randomLane = Math.floor(Math.random() * 3) - 1;
+                        // 重置火车位置到场景后方
+                        train.position.x = randomLane * this.LANE_WIDTH;
+                        train.position.z = -80 - Math.random() * 40;
+                        // 设置新的随机速度
+                        train.userData.speed = 0.8 + Math.random() * 0.4;
+                        train.userData.lane = randomLane;
+                    }
+                }
+            }
+            
+            /**
+             * 更新建筑物位置
+             * 实现建筑物的无限循环
+             */
+            updateBuildings() {
+                for (const building of this.buildings) {
+                    // 移动建筑物(比火车稍慢)
+                    building.position.z += this.PLAYER_SPEED * this.speed * 0.8;
+                    
+                    // 检查建筑物是否超出视野
+                    if (building.position.z > 50) {
+                        // 找到最远的建筑物Z位置
+                        let farthestZ = -this.GROUND_LENGTH;
+                        for (const otherBuilding of this.buildings) {
+                            if (otherBuilding !== building && otherBuilding.position.z < farthestZ) {
+                                farthestZ = otherBuilding.position.z;
+                            }
+                        }
+                        // 将建筑物移动到最远位置后方
+                        building.position.z = farthestZ + 80;
+                    }
+                }
+            }
+            
+            /**
+             * 更新金币状态
+             * 处理金币的移动、收集和重置
+             */
+            updateCoins() {
+                for (const coin of this.coins) {
+                    // 跳过已收集的金币
+                    if (!coin.userData.active) continue;
+                    
+                    // 移动金币
+                    coin.position.z += this.PLAYER_SPEED * this.speed;
+                    // 旋转金币(视觉效果)
+                    coin.rotation.z += 0.15;
+                    // 上下浮动效果
+                    coin.position.y = 2 + Math.sin(this.clock.getElapsedTime() * 3 + this.coins.indexOf(coin)) * 0.3;
+                    
+                    // 检查金币收集
+                    if (this.checkCoinCollection(coin)) {
+                        this.score += 100; // 增加分数
+                        coin.userData.active = false; // 标记为已收集
+                        coin.visible = false; // 隐藏金币
+                        this.createCollectEffect(coin.position); // 创建收集特效
+                    }
+                    
+                    // 重置超出视野的金币
+                    if (coin.position.z > 30) {
+                        const lane = Math.floor(Math.random() * 3) - 1; // 随机轨道
+                        coin.position.set(lane * this.LANE_WIDTH, 2, -60 - Math.random() * 40);
+                        coin.userData.lane = lane;
+                        coin.userData.active = true; // 重置为可收集
+                        coin.visible = true; // 显示金币
+                    }
+                }
+            }
+            
+            /**
+             * 检查金币收集
+             * 简化版碰撞检测(距离检测)
+             * @param {THREE.Object3D} coin - 要检查的金币
+             * @return {boolean} 是否收集到金币
+             */
+            checkCoinCollection(coin) {
+                if (!coin.userData.active) return false;
+                // 计算玩家与金币的距离
+                return this.player.position.distanceTo(coin.position) < 2.5;
+            }
+            
+            /**
+             * 创建收集特效
+             * 金币收集时显示的粒子效果
+             * @param {THREE.Vector3} position - 特效位置
+             */
+            createCollectEffect(position) {
+                const particleCount = 8; // 粒子数量
+                const baseSize = 0.4;    // 基础粒子大小
+                
+                // =============== 创建粒子几何体 ===============
+                const geometry = new THREE.BufferGeometry();
+                // 粒子位置数组
+                const positions = new Float32Array(particleCount * 3);
+                // 粒子颜色数组
+                const colors = new Float32Array(particleCount * 3);
+                // 粒子大小数组
+                const sizes = new Float32Array(particleCount);
+                
+                // 纯黄色(RGB)
+                const pureYellow = [1.0, 0.85, 0.15];
+                
+                // 初始化粒子属性
+                for (let i = 0; i < particleCount; i++) {
+                    // 随机半径和角度(圆形分布)
+                    const radius = Math.random() * 0.4;
+                    const angle = Math.random() * Math.PI * 2;
+                    // 设置位置(围绕收集点圆形分布)
+                    positions[i * 3] = position.x + Math.cos(angle) * radius;
+                    positions[i * 3 + 1] = position.y + Math.sin(angle) * radius * 1.5;
+                    positions[i * 3 + 2] = position.z + (Math.random() - 0.5) * 0.3;
+                    
+                    // 设置颜色(均为黄色)
+                    colors[i * 3] = pureYellow[0];
+                    colors[i * 3 + 1] = pureYellow[1];
+                    colors[i * 3 + 2] = pureYellow[2];
+                    
+                    // 随机大小
+                    sizes[i] = baseSize * (Math.random() * 0.3 + 0.8);
+                }
+                
+                // 设置几何体属性
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+                
+                // =============== 创建粒子材质 ===============
+                const material = new THREE.PointsMaterial({
+                    size: baseSize,            // 基础大小
+                    vertexColors: true,        // 使用顶点颜色
+                    transparent: true,         // 启用透明
+                    opacity: 1.0,              // 初始不透明度
+                    sizeAttenuation: true,     // 根据距离调整大小
+                    blending: THREE.NormalBlending,
+                    alphaTest: 0.1,
+                    color: new THREE.Color().setRGB(pureYellow[0], pureYellow[1], pureYellow[2])
+                });
+                
+                // 创建粒子系统
+                const particles = new THREE.Points(geometry, material);
+                this.scene.add(particles);
+                
+                // =============== 粒子动画 ===============
+                // 存储粒子运动方向和速度
+                const directions = [];
+                const speeds = [];
+                
+                // 初始化粒子运动参数
+                for (let i = 0; i < particleCount; i++) {
+                    const angle = (i / particleCount) * Math.PI * 2;
+                    // 计算向外扩散的方向
+                    directions.push(new THREE.Vector3(
+                        Math.cos(angle) * 0.8,
+                        Math.random() * 0.7 + 0.5, // 向上偏重
+                        Math.sin(angle) * 0.8
+                    ).normalize());
+                    // 随机速度
+                    speeds.push(Math.random() * 0.08 + 0.05);
+                }
+                
+                let lifeTime = 0;          // 特效生命周期
+                const totalLifeTime = 1.2; // 特效总持续时间
+                
+                // 动画函数(递归调用实现连续动画)
+                const animate = () => {
+                    lifeTime += 0.016; // 固定时间步长
+                    const progress = lifeTime / totalLifeTime;
+                    const positions = particles.geometry.attributes.position.array;
+                    const sizes = particles.geometry.attributes.size.array;
+                    
+                    // 更新所有粒子
+                    for (let i = 0; i < particleCount; i++) {
+                        if (progress < 1) {
+                            // 计算速度因子(随时间减速)
+                            const speedFactor = speeds[i] * Math.pow(1 - progress, 1.8);
+                            
+                            // 更新粒子位置
+                            positions[i * 3] += directions[i].x * speedFactor;
+                            positions[i * 3 + 1] += directions[i].y * speedFactor;
+                            positions[i * 3 + 2] += directions[i].z * speedFactor;
+                            
+                            // 粒子大小动画(先放大后缩小)
+                            if (progress < 0.3) {
+                                sizes[i] = baseSize * (1 + progress);
+                            } else {
+                                sizes[i] = baseSize * (1.3 - (progress - 0.3) * 2);
+                            }
+                        }
+                    }
+                    
+                    // 标记几何体属性需要更新
+                    particles.geometry.attributes.position.needsUpdate = true;
+                    particles.geometry.attributes.size.needsUpdate = true;
+                    // 淡出效果
+                    material.opacity = 1 - Math.pow(progress, 2.5);
+                    
+                    // 继续动画或清理
+                    if (progress < 1) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        // 移除粒子系统并释放资源
+                        this.scene.remove(particles);
+                        particles.geometry.dispose();
+                        particles.material.dispose();
+                    }
+                };
+                
+                // 启动动画
+                animate();
+            }
+            
+            /**
+             * 动画循环
+             * Three.js的核心渲染循环
+             */
+            animate() {
+                // 递归调用实现连续动画
+                requestAnimationFrame(() => this.animate());
+                // 更新游戏状态
+                this.update();
+                // 渲染场景
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            /**
+             * 开始游戏
+             * 隐藏开始界面，启动游戏逻辑
+             */
+            startGame() {
+                this.gameStarted = true;
+                this.gameRunning = true;
+                // 隐藏开始界面
+                document.getElementById("instructions").style.display = "none";
+                // 播放跑步动画
+                if (this.playerActions.run) {
+                    this.playerActions.run.play();
+                }
+            }
+            
+            /**
+             * 游戏结束
+             * 显示结束界面，停止游戏逻辑
+             */
+            gameOver() {
+                this.gameRunning = false;
+                // 停止跑步动画
+                if (this.playerActions.run) {
+                    this.playerActions.run.stop();
+                }
+                // 显示最终分数
+                document.getElementById("finalScore").textContent = Math.floor(this.score);
+                // 显示结束界面
+                document.getElementById("gameOver").style.display = "block";
+            }
+            
+            /**
+             * 重新开始游戏
+             * 重置所有游戏状态和对象位置
+             */
+            restartGame() {
+                // =============== 重置游戏状态 ===============
+                this.gameRunning = true;
+                this.gameStarted = true;
+                this.score = 0;
+                this.speed = 1;
+                this.playerLane = 0;
+                this.isJumping = false;
+                this.isSliding = false;
+                this.jumpVelocity = 0;
+                this.clock.start(); // 重置动画时钟
+                
+                // =============== 重置UI ===============
+                document.getElementById("gameOver").style.display = "none";
+                document.getElementById("instructions").style.display = "none";
+                document.getElementById("score").textContent = "0";
+                document.getElementById("speed").textContent = "1";
+                
+                // =============== 重置相机 ===============
+                this.camera.position.set(0, 5, 15);
+                this.camera.lookAt(0, 1, -10);
+                
+                // =============== 重置玩家 ===============
+                this.player.position.set(0,0,0);
+                // 重新开始跑步动画
+                if (this.playerActions.run) {
+                    this.playerActions.run.play();
+                }
+
+                // =============== 重置金币 ===============
+                const lanePatterns = [0, 1, -1, 0, 1, -1];
+                this.coins.forEach((coin, index) => {
+                    const lane = lanePatterns[index % lanePatterns.length];
+                    coin.position.set(lane * this.LANE_WIDTH, 2, -20 - index * 5);
+                    coin.userData.lane = lane;
+                    coin.userData.active = true;
+                    coin.visible = true;
+                    coin.rotation.set(Math.PI/2, 0, 0);
+                });
+                
+                // =============== 重置建筑物 ===============
+                const buildingSpacing = 10;
+                this.buildings.forEach((building, index) => {
+                    const isLeftSide = index % 2 === 0;
+                    const buildingIndex = Math.floor(index / 2);
+                    const zPos = -this.GROUND_LENGTH/2 + buildingIndex * buildingSpacing;
+                    
+                    if (isLeftSide) {
+                        building.position.set(-12, -1, zPos);
+                    } else {
+                        building.position.set(22, -1, zPos);
+                    }
+                });
+                
+                // =============== 重置火车 ===============
+                const minSpacing = 55;
+                const maxSpacing = 80;
+                let currentZ = 10;
+                
+                const trainPatterns = [-1, 0, 1, -1, 0, 1];
+                this.trains.forEach((train, index) => {
+                    const lane = trainPatterns[index % trainPatterns.length];
+                    const spacing = minSpacing + Math.random() * (maxSpacing - minSpacing);
+                    
+                    train.position.set(lane * this.LANE_WIDTH, 0, currentZ);
+                    train.userData.lane = lane;
+                    train.userData.speed = 0.8 + Math.random() * 0.4;
+                    
+                    currentZ -= spacing;
+                });
+            }
+        }
+        
+        // 创建游戏实例
+        const game = new SubwaySurfersGame();
+        
+        // 将游戏控制方法暴露给全局作用域
+        window.startGame = () => game.startGame();
+        window.restartGame = () => game.restartGame();
+        
+    </script>
+</body>
+</html>
